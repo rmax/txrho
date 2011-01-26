@@ -9,7 +9,7 @@ from itertools import imap
 
 from twisted.internet import defer, reactor
 from twisted.python import log
-from cyclone import escape, template
+from cyclone import escape
 from cyclone.web import (
     Application as _Application,
     RequestHandler as _RequestHandler,
@@ -17,7 +17,8 @@ from cyclone.web import (
     _utf8,
 )
 
-from .util.defer import parallel, mustbe_deferred
+from .template import Loader
+from .util.defer import parallel
 
 
 UI_PROCESS_CONCURRENCY = 2
@@ -33,9 +34,10 @@ class Application(_Application):
 class RequestHandler(_RequestHandler):
     """
     Customized RequestHandler:
-        - execute uses mustbe_deferred
         - static_url uses os.stat
         - render_later returns deferred to render template
+        - render_string_deferred uses custom Template/Loader with
+          deferred support
     """
     def render_later(self, template_name, **kwargs):
         """
@@ -59,7 +61,9 @@ class RequestHandler(_RequestHandler):
         registry = RequestHandler._templates
 
         if template_path not in registry:
-            registry[template_path] = template.Loader(template_path)
+            # defer support: use custom Loader with defer Template support
+            registry[template_path] = Loader(template_path)
+            # /defer support
         loader = registry[template_path]
 
         t = loader.load(template_name)
@@ -75,8 +79,8 @@ class RequestHandler(_RequestHandler):
         )
         args.update(self.ui)
         args.update(kwargs)
-
-        return mustbe_deferred(t.generate, **args)
+        # generate() returns a deferred
+        return t.generate(**args)
 
     def static_url(self, path):
         """
@@ -109,35 +113,6 @@ class RequestHandler(_RequestHandler):
             return '{0}{1}?v={2}'.format(base, path, v)
         else:
             return '{0}{1}'.format(base, path)
-
-    def _execute(self, transforms, *args, **kwargs):
-        """
-        Uses mustbe_deferred instead maybeDeferred
-        """
-        self._transforms = transforms
-        method = self.request.method
-        try:
-            if method not in self.SUPPORTED_METHODS:
-                raise HTTPError(405)
-
-            # xsrf check
-            if (method == 'POST' and
-                self.settings.get('xsrf_cookies')):
-                self.check_xsrf_cookie()
-
-            self.prepare()
-
-            if not self._finished:
-                f = getattr(self, method.lower())
-
-                d = mustbe_deferred(f, *args, **kwargs)
-                d.addCallback(self._execute_success)
-                d.addErrback(self._execute_failure)
-
-                self.notifyFinish().addCallback(self.on_connection_close)
-
-        except Exception as e:
-            self._handle_request_exception(e)
 
 
 class PageRenderer(object):
@@ -263,6 +238,20 @@ class PageRenderer(object):
 
 class UIModule(_UIModule):
     """
-    UI Modules can't use deferreds at this time
+    UI Modules supports deferred in render method directly.
+    You can render deferred templates using render_later method.
+
+    class SomeModule(UIModule(:
+        def render(self):
+            # do something and get d = Deferred()
+            # d = self.render_later("foo.html")
+            return d
+
+    In template:
+        {% yield modules.SomeModule() %}
     """
-    pass
+    def render_later(self, path, **kwargs):
+        """
+        Renders given template path in deferred way
+        """
+        return self.handler.render_string_deferred(path, **kwargs)
