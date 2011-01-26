@@ -114,6 +114,12 @@ class RequestHandler(_RequestHandler):
         else:
             return '{0}{1}'.format(base, path)
 
+    def log(self, stuff, why='', isError=False, **kwargs):
+        why = "{0} -- {1}".format(why, self._request_summary())
+        if isError:
+            log.err(stuff, why, **kwargs)
+        else:
+            log.msg(stuff, why, **kwargs)
 
 class PageRenderer(object):
     """
